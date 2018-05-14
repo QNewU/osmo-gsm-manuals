@@ -1,0 +1,130 @@
+
+# MO-Call with OsmoBTS + OsmoBSC with true 3GPP AoIP (planned)
+msc {
+	hscale=2;
+	ms [label="MS"], bts [label="BTS"], bsc[label="BSC"], mgw[label="MGW"], msc_[label="MSC"];
+
+	ms box msc_ [label="lchan allocation sequence"];
+
+	bsc <= msc_ [label="a) BSSMAP Assignment Request"];
+	bsc box bsc [label="OR b) intra-BSC handover decision"];
+	bsc <= msc_ [label="OR c) BSSMAP Handover Request (inter-BSC MT)"];
+
+	--- [label="conn FSM starts lchan_alloc FSM (LA = lchan alloc)"];
+	bsc box bsc [label="LA_ST_ALLOCATION_REQUESTED"];
+
+	bsc box bsc [label="choose an available lchan"];
+
+	--- [label="on any error from here on:"];
+	bsc box bsc [label="lchan_alloc FSM emits parent event to conn FSM:
+			    lchan alloc failed, to trigger:"];
+	bsc => msc_ [label="a) BSSMAP Assignment Failed"];
+	bsc box bsc [label="OR b) intra-BSC handover failed"];
+	bsc => msc_ [label="OR c) BSSMAP Handover Failure"];
+	---;
+
+	--- [label="is the chosen lchan on dynamic timeslot that is currently used as PDCH?"];
+	bsc box bsc [label="The timeslot is now marked as 'in switchover' and
+		            will not be chosen by concurrent lchan allocations"];
+	bts <= bsc [label="i) RSL RF Chan Release of PDCH (Osmocom dyn TS)"];
+	bts <= bsc [label="OR ii) RSL PDCH Deact (ip.access dyn TS)"];
+	bsc box bsc [label="LA_ST_WAIT_PDCH_DEACT"];
+	bts => bsc [label="i) RSL RF Chan Release ACK (Osmocom dyn TS)"];
+	bts => bsc [label="OR ii) RSL PDCH Deact ACK (ip.access dyn TS)"];
+	---;
+	bsc box bsc [label="LA_ST_LCHAN_AVAILABLE"];
+	bsc box bsc [label="TODO: the lchan must be marked so that it is never
+		            chosen by concurrent lchan allocations"];
+	--- [label="a), c) is it a TCH and has no RTP stream set up yet?"];
+	bsc => mgw [label="CRCX (for BTS) via mgcp_conn_create()"];
+	bsc box bsc [label="LA_ST_WAIT_CRCX_BTS"];
+	bsc <= mgw [label="CRCX OK (for BTS)"];
+	---;
+	bts <= bsc [label="RSL Chan Activ"];
+	bsc box bsc [label="LA_ST_WAIT_CHAN_ACTIV_ACK"];
+	bts => bsc [label="RSL Chan Activ ACK"];
+
+	bts box bsc [label="TODO: so far we send the IPACC CRCX and RR Assignment Command at the same time.
+		Then we postpone the Assignment Command Ack action until we also received the BTS'
+		CRCX information.
+		It would be easier to wait for IPACC CRCX ACK before doing RR Assignment"];
+
+	--- [label="is it an osmo-bts or ip.access nanobts using the IPA transport?"];
+	bts <= bsc [label="IPACC CRCX"];
+	bsc box bsc [label="LA_ST_WAIT_IPACC_CRCX_ACK"];
+	bts => bsc [label="IPACC CRCX ACK"];
+	bts <= bsc [label="IPACC MDCX"];
+	bsc box bsc [label="LA_ST_WAIT_IPACC_MDCX_ACK"];
+	bts => bsc [label="IPACC MDCX ACK"];
+	---;
+	bsc box bsc [label="lchan_alloc FSM emits parent event to conn FSM: lchan is ready, to trigger:"];
+	ms <= bsc [label="a) RR Assignment Command"];
+	ms <= bsc [label="OR b) RR Handover Command"];
+	bsc => msc_ [label="OR c) BSSMAP Handover Request Acknowledge"];
+	bsc box bsc [label="LA_ST_WAIT_MS_ACCEPTS_LCHAN"];
+	ms => bsc [label="a) RR Assignment Complete"];
+
+	ms => bsc [label="OR b) RR Handover Detect"];
+	ms => bsc [label="OR c) RR Handover Accept"];
+	bsc box bsc [label="lchan_alloc FSM receives event: LA_EV_MS_ACCEPTED_LCHAN from conn FSM"];
+
+	--- [label="is it a TCH?"];
+	bsc => mgw [label="MDCX (for BTS)"];
+	bsc box bsc [label="LA_ST_WAIT_MDCX_BTS"];
+	bsc <= mgw [label="MDCX OK (for BTS)"];
+	---;
+	--- [label="a), c) is it a TCH and has no RTP stream set up yet?"];
+	bsc => mgw [label="CRCX (for MSC)"];
+	bsc box bsc [label="LA_ST_WAIT_CRCX_MSC"];
+	bsc <= mgw [label="CRCX OK (for MSC)"];
+	---;
+
+	bsc box bsc [label="LA_ST_LCHAN_IN_USE"];
+	bsc box bsc [label="lchan_alloc FSM emits parent event: lchan is established"];
+	--- [label="At this point, the lchan_alloc FSM passes responsibility back to the conn FSM"];
+	bsc box bsc [label="conn FSM receives event 'the lchan is established'"];
+	bsc => msc_ [label="a) BSSMAP Assignment Complete"];
+	bsc => msc_ [label="OR c) BSSMAP Handover Detected"];
+	ms <= bsc [label="c) RR Physical Information"];
+	bsc box bsc [label="c) conn FSM: ST_WAIT_MT_HO_SABM"];
+	ms => bsc [label="c) RR SABM"];
+	ms <= bsc [label="c) RR UA"];
+
+
+	bsc box bsc [label="c) conn FSM: ST_WAIT_MT_HO_COMPLETE"];
+
+	ms => bsc [label="c) RR Handover Complete"];
+	bsc => msc_ [label="c) BSSMAP Handover Complete"];
+
+	bsc box bsc [label="if an old lchan existed, trigger LA_EV_LCHAN_RELEASE at the old lchan's FSM"];
+	bsc box bsc [label="conn FSM: ST_ACTIVE"];
+
+	--- [label="When the lchan is no longer used, the conn FSM notifies the lchan_alloc FSM:"];
+
+	bsc box bsc [label="conn FSM sends event LA_EV_LCHAN_RELEASE"];
+	bts <= bsc [label="RLL Release Request (Local End)..."];
+	bts <= bsc [label="...for each SAPI"];
+	ms <= bsc [label="RR Channel Release"];
+	bts <= bsc [label="RSL Deactivate SACCH"];
+	bsc box bsc [label="start T3109"];
+	bsc box bsc [label="LA_ST_WAIT_RLL_RELEASE_CONFIRM"];
+	bsc box bsc [label="(for bts->nokia.no_loc_rel_cnf this state
+			     immediately advances to LA_ST_WAIT_T3111)"];
+	bts => bsc [label="RLL Release Confirm..."];
+	bts => bsc [label="...for each SAPI"];
+	--- [label="when all SAPIs are released:"];
+	bsc box bsc [label="stop T3109"];
+	bsc box bsc [label="LA_ST_WAIT_T3111"];
+	bts <= bsc [label="RSL RF Channel Release"];
+	bsc box bsc [label="LA_ST_WAIT_RSL_RF_RELEASE_ACK"];
+	bts => bsc [label="RSL RF Channel Release Ack"];
+
+	--- [label="chosen lchan on dynamic timeslot that is now unused and should go to PDCH mode?"];
+	bts <= bsc [label="i) RSL Chan Activ of PDCH (Osmocom dyn TS)"];
+	bts <= bsc [label="OR ii) RSL PDCH Act (ip.access dyn TS)"];
+	bsc box bsc [label="LA_ST_WAIT_PDCH_ACT"];
+	bts => bsc [label="i) RSL Chan Activ Ack (Osmocom dyn TS)"];
+	bts => bsc [label="OR ii) RSL PDCH Act Ack (ip.access dyn TS)"];
+	---;
+	bsc box bsc [label="LA_ST_END"];
+}
